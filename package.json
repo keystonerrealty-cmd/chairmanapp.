@@ -1,0 +1,15 @@
+{
+  "name": "chairman-agent-os",
+  "version": "3.0.0",
+  "description": "Chairman Agent OS — zero-trust executive command dashboard. Zero dependencies, zero cost.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {},
+  "private": true,
+  "license": "UNLICENSED"
+}
