@@ -4,12 +4,14 @@
 
    RUN IT:   node chairman.js     then open http://localhost:8080
 
-   NEW LOOK: frosted glass panels, gradient accents, animated hovers, and a
-   LIGHT / DARK toggle (the ◐ button, top right). Your choice is remembered
-   per device. Every page and control is unchanged underneath.
+   LOW-SPEC LAPTOPS: when the AI Brain is set to Ollama the client now sends
+   tuned options — 2048 context, 2 threads, 400 token cap, and keep_alive 30m
+   so the model stays in RAM instead of reloading from disk every call.
+   Timeout is raised to 5 minutes because slow CPUs genuinely need it.
 
-   HUSTLE MODE (Live Operations) runs money-focused orders in parallel.
-   SPENDING CEILING lets him request money but never take it.
+   On a 2-core Celeron with 4 GB RAM, use qwen2.5:1.5b at most. Anything
+   larger will swap to disk and crawl. Groq's free cloud tier is far faster
+   on such hardware and needs no card.
 
    Creates data.json beside itself. Back that file up — it is your system.
    ========================================================================== */
@@ -228,12 +230,25 @@ function chat(cfg, messages, opts={}){
     if(!P) return reject(new Error('Unknown provider: '+cfg.provider));
     if(!P.nokey && !cfg.key) return reject(new Error('No API key configured for '+P.label));
 
-    const body = JSON.stringify({
+    /* Local models on weak hardware: every token costs real seconds.
+       Cap output hard, shrink the context window, and keep the model
+       resident in RAM so it is not reloaded from disk on every call. */
+    const isLocal = cfg.provider==='ollama';
+    const body = JSON.stringify(Object.assign({
       model: cfg.model || P.model,
       messages,
       temperature: opts.temperature!=null?opts.temperature:0.4,
-      max_tokens: opts.max_tokens||3000
-    });
+      max_tokens: opts.max_tokens || (isLocal ? 400 : 3000)
+    }, isLocal ? {
+      keep_alive: '30m',
+      options: {
+        num_ctx: 2048,        // small context = far less RAM and much faster
+        num_thread: 2,        // match the N4500's 2 physical cores
+        num_batch: 64,        // smaller batches suit low-memory machines
+        top_k: 20,            // less sampling work per token
+        repeat_penalty: 1.1
+      }
+    } : {}));
     const headers = { 'Content-Type':'application/json', 'Content-Length':Buffer.byteLength(body) };
     if(!P.nokey) headers['Authorization']='Bearer '+cfg.key;
     if(cfg.provider==='openrouter'){ headers['HTTP-Referer']='http://localhost'; headers['X-Title']='Chairman Agent OS'; }
@@ -241,7 +256,8 @@ function chat(cfg, messages, opts={}){
     const lib = P.plain ? http : https;
     const t0 = Date.now();
     const req = lib.request({ hostname:P.host, port:P.port||(P.plain?80:443),
-      path:P.path, method:'POST', headers, timeout: opts.timeout||60000 }, res=>{
+      path:P.path, method:'POST', headers,
+      timeout: opts.timeout || (isLocal ? 300000 : 60000) }, res=>{
       let d='';
       res.on('data',c=>d+=c);
       res.on('end',()=>{
@@ -270,7 +286,9 @@ function chat(cfg, messages, opts={}){
         }catch(e){ reject(new Error('Bad JSON from provider')); }
       });
     });
-    req.on('timeout',()=>{ req.destroy(); reject(new Error('TIMEOUT — model took too long')); });
+    req.on('timeout',()=>{ req.destroy(); reject(new Error(isLocal
+      ? 'TIMEOUT — a local model on slow hardware can take minutes. Try a smaller model (qwen2.5:1.5b) or switch to Groq.'
+      : 'TIMEOUT — model took too long')); });
     req.on('error',e=>{
       if(cfg.provider==='ollama' && /ECONNREFUSED/.test(e.message))
         return reject(new Error('Ollama is not running. Install from ollama.com, then: ollama pull llama3.2'));
